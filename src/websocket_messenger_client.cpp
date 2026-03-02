@@ -55,7 +55,8 @@ static void parse_ws_url(const std::string& url,
 
 WebSocketMessengerClient::WebSocketMessengerClient(
     const std::string& uri,
-    const std::vector<uint8_t>& encryption_key
+    const std::vector<uint8_t>& encryption_key,
+    const std::string& user_agent
 ) : encryption_key_(encryption_key) {
     std::string host, path;
     INTERNET_PORT port;
@@ -67,7 +68,7 @@ WebSocketMessengerClient::WebSocketMessengerClient(
 
     // Open session
     h_session_ = WinHttpOpen(
-        L"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36",
+        to_wstring(user_agent).c_str(),
         WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
         WINHTTP_NO_PROXY_NAME,
         WINHTTP_NO_PROXY_BYPASS,

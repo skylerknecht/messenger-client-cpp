@@ -16,12 +16,15 @@
 #include <thread>
 #include <vector>
 
+static const std::string DEFAULT_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36";
+
 static bool try_ws(const std::string& url, const std::vector<uint8_t>& encryption_key,
+                   const std::string& user_agent,
                    const std::vector<std::string>& remote_port_forwards,
                    std::unique_ptr<MessengerClient>& client) {
     try {
         std::cout << "[WebSocket] Trying " << url << std::endl;
-        auto ws_client = std::make_unique<WebSocketMessengerClient>(url, encryption_key);
+        auto ws_client = std::make_unique<WebSocketMessengerClient>(url, encryption_key, user_agent);
 
         for (const auto& config : remote_port_forwards) {
             auto forwarder = std::make_unique<RemotePortForwarder>(*ws_client, config);
@@ -40,11 +43,12 @@ static bool try_ws(const std::string& url, const std::vector<uint8_t>& encryptio
 }
 
 static bool try_http(const std::string& url, const std::vector<uint8_t>& encryption_key,
+                     const std::string& user_agent,
                      const std::vector<std::string>& remote_port_forwards,
                      std::unique_ptr<MessengerClient>& client) {
     try {
         std::cout << "[HTTP] Trying " << url << std::endl;
-        auto http_client = std::make_unique<HTTPMessengerClient>(url, encryption_key);
+        auto http_client = std::make_unique<HTTPMessengerClient>(url, encryption_key, user_agent);
 
         for (const auto& config : remote_port_forwards) {
             auto forwarder = std::make_unique<RemotePortForwarder>(*http_client, config);
@@ -79,6 +83,7 @@ int main(int argc, char* argv[]) {
 
     std::string uri = argv[1];
     std::vector<uint8_t> encryption_key = Crypto::hash(argv[2]);
+    std::string user_agent = DEFAULT_USER_AGENT;
 
     std::vector<std::string> remote_port_forwards;
     for (int i = 3; i < argc; i++) {
@@ -113,9 +118,9 @@ int main(int argc, char* argv[]) {
 
         bool success = false;
         if (attempt.find("http") != std::string::npos) {
-            success = try_http(url, encryption_key, remote_port_forwards, client);
+            success = try_http(url, encryption_key, user_agent, remote_port_forwards, client);
         } else if (attempt.find("ws") != std::string::npos) {
-            success = try_ws(url, encryption_key, remote_port_forwards, client);
+            success = try_ws(url, encryption_key, user_agent, remote_port_forwards, client);
         }
 
         if (success) {

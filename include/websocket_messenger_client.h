@@ -15,7 +15,8 @@
 
 class WebSocketMessengerClient : public MessengerClient {
 public:
-    WebSocketMessengerClient(const std::string& uri, const std::vector<uint8_t>& encryption_key);
+    WebSocketMessengerClient(const std::string& uri, const std::vector<uint8_t>& encryption_key,
+                             const std::string& user_agent);
     ~WebSocketMessengerClient() override;
 
     void connect() override;
