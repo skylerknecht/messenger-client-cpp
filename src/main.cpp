@@ -5,6 +5,10 @@
 #include "http_messenger_client.h"
 #include "remote_port_forwarder.h"
 
+#include <winsock2.h>
+#include <ws2tcpip.h>
+
+#include <future>
 #include <iostream>
 #include <memory>
 #include <sstream>
@@ -12,22 +16,21 @@
 #include <thread>
 #include <vector>
 
-static const std::string USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:128.0) Gecko/20100101 Firefox/128.0";
-
 static bool try_ws(const std::string& url, const std::vector<uint8_t>& encryption_key,
                    const std::vector<std::string>& remote_port_forwards,
                    std::unique_ptr<MessengerClient>& client) {
     try {
         std::cout << "[WebSocket] Trying " << url << std::endl;
         auto ws_client = std::make_unique<WebSocketMessengerClient>(url, encryption_key);
-        ws_client->connect();
-        client = std::move(ws_client);
 
         for (const auto& config : remote_port_forwards) {
-            auto forwarder = std::make_unique<RemotePortForwarder>(*client, config);
+            auto forwarder = std::make_unique<RemotePortForwarder>(*ws_client, config);
             std::thread([f = std::move(forwarder)]() { f->start(); }).detach();
             std::cout << "Started RemotePortForwarder with config: " << config << std::endl;
         }
+
+        ws_client->connect();
+        client = std::move(ws_client);
 
         return true;
     } catch (const std::exception& ex) {
@@ -42,14 +45,15 @@ static bool try_http(const std::string& url, const std::vector<uint8_t>& encrypt
     try {
         std::cout << "[HTTP] Trying " << url << std::endl;
         auto http_client = std::make_unique<HTTPMessengerClient>(url, encryption_key);
-        http_client->connect();
-        client = std::move(http_client);
 
         for (const auto& config : remote_port_forwards) {
-            auto forwarder = std::make_unique<RemotePortForwarder>(*client, config);
+            auto forwarder = std::make_unique<RemotePortForwarder>(*http_client, config);
             std::thread([f = std::move(forwarder)]() { f->start(); }).detach();
             std::cout << "Started RemotePortForwarder with config: " << config << std::endl;
         }
+
+        http_client->connect();
+        client = std::move(http_client);
 
         return true;
     } catch (const std::exception& ex) {
@@ -59,8 +63,17 @@ static bool try_http(const std::string& url, const std::vector<uint8_t>& encrypt
 }
 
 int main(int argc, char* argv[]) {
+    // Initialize Winsock
+    WSADATA wsa_data;
+    int wsa_result = WSAStartup(MAKEWORD(2, 2), &wsa_data);
+    if (wsa_result != 0) {
+        std::cerr << "WSAStartup failed: " << wsa_result << std::endl;
+        return 1;
+    }
+
     if (argc < 3) {
         std::cout << "Usage: messenger-client-cpp <URL> <Encryption_Key> [remote_port_forwards...]" << std::endl;
+        WSACleanup();
         return 1;
     }
 
@@ -108,10 +121,12 @@ int main(int argc, char* argv[]) {
         if (success) {
             // Block forever
             std::promise<void>().get_future().wait();
+            WSACleanup();
             return 0;
         }
     }
 
     std::cout << "All connection attempts failed." << std::endl;
+    WSACleanup();
     return 1;
 }

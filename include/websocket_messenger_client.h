@@ -3,15 +3,20 @@
 
 #include "messenger_client.h"
 
+#include <windows.h>
+#include <winhttp.h>
+
 #include <mutex>
 #include <queue>
 #include <string>
 #include <vector>
 
+#pragma comment(lib, "winhttp.lib")
+
 class WebSocketMessengerClient : public MessengerClient {
 public:
     WebSocketMessengerClient(const std::string& uri, const std::vector<uint8_t>& encryption_key);
-    ~WebSocketMessengerClient() override = default;
+    ~WebSocketMessengerClient() override;
 
     void connect() override;
     void send_downstream_message(const Message& message) override;
@@ -20,10 +25,16 @@ public:
 private:
     void receive_messages();
     void send_messages();
+    void cleanup();
 
     std::string uri_;
     std::vector<uint8_t> encryption_key_;
     std::string messenger_id_;
+
+    HINTERNET h_session_ = nullptr;
+    HINTERNET h_connect_ = nullptr;
+    HINTERNET h_request_ = nullptr;
+    HINTERNET h_websocket_ = nullptr;
 
     std::queue<Message> downstream_messages_;
     std::mutex downstream_mutex_;

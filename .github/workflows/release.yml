@@ -1,0 +1,56 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    strategy:
+      matrix:
+        arch: [x64, x86]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure CMake
+        run: cmake -B build -A ${{ matrix.arch == 'x64' && 'x64' || 'Win32' }}
+
+      - name: Build
+        run: cmake --build build --config Release
+
+      - name: Rename artifacts
+        run: |
+          mv build/Release/messenger-client-cpp.exe messenger-client-cpp-${{ matrix.arch }}.exe
+          mv build/Release/messenger-client-cpp.dll messenger-client-cpp-${{ matrix.arch }}.dll
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: messenger-client-cpp-${{ matrix.arch }}
+          path: |
+            messenger-client-cpp-${{ matrix.arch }}.exe
+            messenger-client-cpp-${{ matrix.arch }}.dll
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            messenger-client-cpp-x64/messenger-client-cpp-x64.exe
+            messenger-client-cpp-x64/messenger-client-cpp-x64.dll
+            messenger-client-cpp-x86/messenger-client-cpp-x86.exe
+            messenger-client-cpp-x86/messenger-client-cpp-x86.dll

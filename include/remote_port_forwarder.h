@@ -12,7 +12,7 @@ public:
     void start();
 
 private:
-    void handle_client(int client_fd);
+    void handle_client(SOCKET client_fd);
     void parse_config(const std::string& config);
 
     MessengerClient& messenger_;

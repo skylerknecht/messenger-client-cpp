@@ -6,11 +6,6 @@
 #include <thread>
 #include <random>
 
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <unistd.h>
-
 static std::string random_alphanum(int len = 10) {
     static const char chars[] =
         "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
@@ -53,31 +48,31 @@ void RemotePortForwarder::parse_config(const std::string& config) {
 }
 
 void RemotePortForwarder::start() {
-    int server_fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (server_fd < 0) {
+    SOCKET server_fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (server_fd == INVALID_SOCKET) {
         std::cerr << listening_host_ << ":" << listening_port_
                   << " failed to create socket" << std::endl;
         return;
     }
 
-    int opt = 1;
+    char opt = 1;
     setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
 
     struct sockaddr_in addr{};
     addr.sin_family = AF_INET;
-    addr.sin_port = htons(listening_port_);
-    inet_pton(AF_INET, listening_host_.c_str(), &addr.sin_addr);
+    addr.sin_port = htons(static_cast<u_short>(listening_port_));
+    InetPtonA(AF_INET, listening_host_.c_str(), &addr.sin_addr);
 
-    if (bind(server_fd, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr)) < 0) {
+    if (bind(server_fd, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr)) == SOCKET_ERROR) {
         std::cerr << listening_host_ << ":" << listening_port_
                   << " is already in use or encountered an error" << std::endl;
-        close(server_fd);
+        closesocket(server_fd);
         return;
     }
 
-    if (listen(server_fd, SOMAXCONN) < 0) {
+    if (listen(server_fd, SOMAXCONN) == SOCKET_ERROR) {
         std::cerr << "Failed to listen on " << listening_host_ << ":" << listening_port_ << std::endl;
-        close(server_fd);
+        closesocket(server_fd);
         return;
     }
 
@@ -85,8 +80,8 @@ void RemotePortForwarder::start() {
               << listening_host_ << ":" << listening_port_ << std::endl;
 
     while (true) {
-        int client_fd = accept(server_fd, nullptr, nullptr);
-        if (client_fd < 0) {
+        SOCKET client_fd = accept(server_fd, nullptr, nullptr);
+        if (client_fd == INVALID_SOCKET) {
             continue;
         }
 
@@ -94,7 +89,7 @@ void RemotePortForwarder::start() {
     }
 }
 
-void RemotePortForwarder::handle_client(int client_fd) {
+void RemotePortForwarder::handle_client(SOCKET client_fd) {
     std::string client_id = random_alphanum(10);
 
     {

@@ -1,54 +1,119 @@
 #include "crypto.h"
 
-#include <openssl/aes.h>
-#include <openssl/evp.h>
-#include <openssl/rand.h>
-#include <openssl/sha.h>
-
+#include <windows.h>
+#include <bcrypt.h>
 #include <stdexcept>
 #include <cstring>
 
+#pragma comment(lib, "bcrypt.lib")
+
+#ifndef NT_SUCCESS
+#define NT_SUCCESS(Status) (((NTSTATUS)(Status)) >= 0)
+#endif
+
 std::vector<uint8_t> Crypto::hash(const std::string& encryption_key) {
-    std::vector<uint8_t> result(SHA256_DIGEST_LENGTH);
-    SHA256(reinterpret_cast<const unsigned char*>(encryption_key.data()),
-           encryption_key.size(), result.data());
+    BCRYPT_ALG_HANDLE hAlg = nullptr;
+    BCRYPT_HASH_HANDLE hHash = nullptr;
+    std::vector<uint8_t> result(32);
+
+    NTSTATUS status = BCryptOpenAlgorithmProvider(&hAlg, BCRYPT_SHA256_ALGORITHM, nullptr, 0);
+    if (!NT_SUCCESS(status)) {
+        throw std::runtime_error("Failed to open SHA256 algorithm provider");
+    }
+
+    DWORD hashObjectSize = 0;
+    DWORD dataSize = 0;
+    BCryptGetProperty(hAlg, BCRYPT_OBJECT_LENGTH, reinterpret_cast<PUCHAR>(&hashObjectSize), sizeof(DWORD), &dataSize, 0);
+
+    std::vector<uint8_t> hashObject(hashObjectSize);
+
+    status = BCryptCreateHash(hAlg, &hHash, hashObject.data(), hashObjectSize, nullptr, 0, 0);
+    if (!NT_SUCCESS(status)) {
+        BCryptCloseAlgorithmProvider(hAlg, 0);
+        throw std::runtime_error("Failed to create hash");
+    }
+
+    status = BCryptHashData(hHash, reinterpret_cast<PUCHAR>(const_cast<char*>(encryption_key.data())),
+                            static_cast<ULONG>(encryption_key.size()), 0);
+    if (!NT_SUCCESS(status)) {
+        BCryptDestroyHash(hHash);
+        BCryptCloseAlgorithmProvider(hAlg, 0);
+        throw std::runtime_error("Failed to hash data");
+    }
+
+    status = BCryptFinishHash(hHash, result.data(), static_cast<ULONG>(result.size()), 0);
+    if (!NT_SUCCESS(status)) {
+        BCryptDestroyHash(hHash);
+        BCryptCloseAlgorithmProvider(hAlg, 0);
+        throw std::runtime_error("Failed to finish hash");
+    }
+
+    BCryptDestroyHash(hHash);
+    BCryptCloseAlgorithmProvider(hAlg, 0);
+
     return result;
 }
 
 std::vector<uint8_t> Crypto::encrypt(const std::vector<uint8_t>& key, const std::vector<uint8_t>& plaintext) {
+    BCRYPT_ALG_HANDLE hAlg = nullptr;
+    BCRYPT_KEY_HANDLE hKey = nullptr;
+
+    NTSTATUS status = BCryptOpenAlgorithmProvider(&hAlg, BCRYPT_AES_ALGORITHM, nullptr, 0);
+    if (!NT_SUCCESS(status)) {
+        throw std::runtime_error("Failed to open AES algorithm provider");
+    }
+
+    status = BCryptSetProperty(hAlg, BCRYPT_CHAINING_MODE,
+                               reinterpret_cast<PUCHAR>(const_cast<wchar_t*>(BCRYPT_CHAIN_MODE_CBC)),
+                               static_cast<ULONG>(wcslen(BCRYPT_CHAIN_MODE_CBC) * sizeof(wchar_t) + sizeof(wchar_t)), 0);
+    if (!NT_SUCCESS(status)) {
+        BCryptCloseAlgorithmProvider(hAlg, 0);
+        throw std::runtime_error("Failed to set CBC chaining mode");
+    }
+
+    DWORD keyObjectSize = 0;
+    DWORD dataSize = 0;
+    BCryptGetProperty(hAlg, BCRYPT_OBJECT_LENGTH, reinterpret_cast<PUCHAR>(&keyObjectSize), sizeof(DWORD), &dataSize, 0);
+
+    std::vector<uint8_t> keyObject(keyObjectSize);
+
+    status = BCryptGenerateSymmetricKey(hAlg, &hKey, keyObject.data(), keyObjectSize,
+                                        const_cast<PUCHAR>(key.data()), static_cast<ULONG>(key.size()), 0);
+    if (!NT_SUCCESS(status)) {
+        BCryptCloseAlgorithmProvider(hAlg, 0);
+        throw std::runtime_error("Failed to generate symmetric key");
+    }
+
     std::vector<uint8_t> iv = generate_random_bytes(AES_BLOCK_SIZE);
+    std::vector<uint8_t> iv_copy = iv;
 
-    EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
-    if (!ctx) {
-        throw std::runtime_error("Failed to create cipher context");
+    DWORD ciphertextSize = 0;
+    status = BCryptEncrypt(hKey, const_cast<PUCHAR>(plaintext.data()), static_cast<ULONG>(plaintext.size()),
+                           nullptr, iv_copy.data(), static_cast<ULONG>(iv_copy.size()),
+                           nullptr, 0, &ciphertextSize, BCRYPT_BLOCK_PADDING);
+    if (!NT_SUCCESS(status)) {
+        BCryptDestroyKey(hKey);
+        BCryptCloseAlgorithmProvider(hAlg, 0);
+        throw std::runtime_error("Failed to get ciphertext size");
     }
 
-    if (EVP_EncryptInit_ex(ctx, EVP_aes_256_cbc(), nullptr, key.data(), iv.data()) != 1) {
-        EVP_CIPHER_CTX_free(ctx);
-        throw std::runtime_error("Failed to initialize encryption");
-    }
+    std::vector<uint8_t> ciphertext(ciphertextSize);
+    iv_copy = iv;
 
-    std::vector<uint8_t> ciphertext(plaintext.size() + AES_BLOCK_SIZE);
-    int len = 0;
-    int ciphertext_len = 0;
-
-    if (EVP_EncryptUpdate(ctx, ciphertext.data(), &len, plaintext.data(), static_cast<int>(plaintext.size())) != 1) {
-        EVP_CIPHER_CTX_free(ctx);
+    status = BCryptEncrypt(hKey, const_cast<PUCHAR>(plaintext.data()), static_cast<ULONG>(plaintext.size()),
+                           nullptr, iv_copy.data(), static_cast<ULONG>(iv_copy.size()),
+                           ciphertext.data(), ciphertextSize, &ciphertextSize, BCRYPT_BLOCK_PADDING);
+    if (!NT_SUCCESS(status)) {
+        BCryptDestroyKey(hKey);
+        BCryptCloseAlgorithmProvider(hAlg, 0);
         throw std::runtime_error("Failed to encrypt data");
     }
-    ciphertext_len = len;
 
-    if (EVP_EncryptFinal_ex(ctx, ciphertext.data() + len, &len) != 1) {
-        EVP_CIPHER_CTX_free(ctx);
-        throw std::runtime_error("Failed to finalize encryption");
-    }
-    ciphertext_len += len;
+    BCryptDestroyKey(hKey);
+    BCryptCloseAlgorithmProvider(hAlg, 0);
 
-    EVP_CIPHER_CTX_free(ctx);
+    ciphertext.resize(ciphertextSize);
 
-    ciphertext.resize(ciphertext_len);
-
-    // Prepend IV to ciphertext
     std::vector<uint8_t> result;
     result.reserve(iv.size() + ciphertext.size());
     result.insert(result.end(), iv.begin(), iv.end());
@@ -65,41 +130,69 @@ std::vector<uint8_t> Crypto::decrypt(const std::vector<uint8_t>& key, const std:
     std::vector<uint8_t> iv(ciphertext.begin(), ciphertext.begin() + AES_BLOCK_SIZE);
     std::vector<uint8_t> encrypted_data(ciphertext.begin() + AES_BLOCK_SIZE, ciphertext.end());
 
-    EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
-    if (!ctx) {
-        throw std::runtime_error("Failed to create cipher context");
+    BCRYPT_ALG_HANDLE hAlg = nullptr;
+    BCRYPT_KEY_HANDLE hKey = nullptr;
+
+    NTSTATUS status = BCryptOpenAlgorithmProvider(&hAlg, BCRYPT_AES_ALGORITHM, nullptr, 0);
+    if (!NT_SUCCESS(status)) {
+        throw std::runtime_error("Failed to open AES algorithm provider");
     }
 
-    if (EVP_DecryptInit_ex(ctx, EVP_aes_256_cbc(), nullptr, key.data(), iv.data()) != 1) {
-        EVP_CIPHER_CTX_free(ctx);
-        throw std::runtime_error("Failed to initialize decryption");
+    status = BCryptSetProperty(hAlg, BCRYPT_CHAINING_MODE,
+                               reinterpret_cast<PUCHAR>(const_cast<wchar_t*>(BCRYPT_CHAIN_MODE_CBC)),
+                               static_cast<ULONG>(wcslen(BCRYPT_CHAIN_MODE_CBC) * sizeof(wchar_t) + sizeof(wchar_t)), 0);
+    if (!NT_SUCCESS(status)) {
+        BCryptCloseAlgorithmProvider(hAlg, 0);
+        throw std::runtime_error("Failed to set CBC chaining mode");
     }
 
-    std::vector<uint8_t> plaintext(encrypted_data.size() + AES_BLOCK_SIZE);
-    int len = 0;
-    int plaintext_len = 0;
+    DWORD keyObjectSize = 0;
+    DWORD dataSize = 0;
+    BCryptGetProperty(hAlg, BCRYPT_OBJECT_LENGTH, reinterpret_cast<PUCHAR>(&keyObjectSize), sizeof(DWORD), &dataSize, 0);
 
-    if (EVP_DecryptUpdate(ctx, plaintext.data(), &len, encrypted_data.data(), static_cast<int>(encrypted_data.size())) != 1) {
-        EVP_CIPHER_CTX_free(ctx);
+    std::vector<uint8_t> keyObject(keyObjectSize);
+
+    status = BCryptGenerateSymmetricKey(hAlg, &hKey, keyObject.data(), keyObjectSize,
+                                        const_cast<PUCHAR>(key.data()), static_cast<ULONG>(key.size()), 0);
+    if (!NT_SUCCESS(status)) {
+        BCryptCloseAlgorithmProvider(hAlg, 0);
+        throw std::runtime_error("Failed to generate symmetric key");
+    }
+
+    DWORD plaintextSize = 0;
+    std::vector<uint8_t> iv_copy = iv;
+    status = BCryptDecrypt(hKey, encrypted_data.data(), static_cast<ULONG>(encrypted_data.size()),
+                           nullptr, iv_copy.data(), static_cast<ULONG>(iv_copy.size()),
+                           nullptr, 0, &plaintextSize, BCRYPT_BLOCK_PADDING);
+    if (!NT_SUCCESS(status)) {
+        BCryptDestroyKey(hKey);
+        BCryptCloseAlgorithmProvider(hAlg, 0);
+        throw std::runtime_error("Failed to get plaintext size");
+    }
+
+    std::vector<uint8_t> plaintext(plaintextSize);
+    iv_copy = iv;
+
+    status = BCryptDecrypt(hKey, encrypted_data.data(), static_cast<ULONG>(encrypted_data.size()),
+                           nullptr, iv_copy.data(), static_cast<ULONG>(iv_copy.size()),
+                           plaintext.data(), plaintextSize, &plaintextSize, BCRYPT_BLOCK_PADDING);
+    if (!NT_SUCCESS(status)) {
+        BCryptDestroyKey(hKey);
+        BCryptCloseAlgorithmProvider(hAlg, 0);
         throw std::runtime_error("Failed to decrypt data");
     }
-    plaintext_len = len;
 
-    if (EVP_DecryptFinal_ex(ctx, plaintext.data() + len, &len) != 1) {
-        EVP_CIPHER_CTX_free(ctx);
-        throw std::runtime_error("Failed to finalize decryption");
-    }
-    plaintext_len += len;
+    BCryptDestroyKey(hKey);
+    BCryptCloseAlgorithmProvider(hAlg, 0);
 
-    EVP_CIPHER_CTX_free(ctx);
-
-    plaintext.resize(plaintext_len);
+    plaintext.resize(plaintextSize);
     return plaintext;
 }
 
 std::vector<uint8_t> Crypto::generate_random_bytes(int count) {
     std::vector<uint8_t> bytes(count);
-    if (RAND_bytes(bytes.data(), count) != 1) {
+    NTSTATUS status = BCryptGenRandom(nullptr, bytes.data(), static_cast<ULONG>(count), BCRYPT_USE_SYSTEM_PREFERRED_RNG);
+    if (!NT_SUCCESS(status)) {
         throw std::runtime_error("Failed to generate random bytes");
     }
     return bytes;

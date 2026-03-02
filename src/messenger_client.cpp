@@ -4,12 +4,6 @@
 #include <cstring>
 #include <stdexcept>
 
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <netdb.h>
-#include <unistd.h>
-
 std::vector<Message> MessengerClient::deserialize_messages(
     const std::vector<uint8_t>& encryption_key,
     const std::vector<uint8_t>& raw_data
@@ -50,10 +44,11 @@ void MessengerClient::handle_message(const Message& message) {
         auto it = forwarder_clients.find(sdm->forwarder_client_id);
         if (it != forwarder_clients.end()) {
             if (sdm->data.empty()) {
-                close(it->second);
+                closesocket(it->second);
                 forwarder_clients.erase(it);
             } else {
-                send(it->second, sdm->data.data(), sdm->data.size(), 0);
+                ::send(it->second, reinterpret_cast<const char*>(sdm->data.data()),
+                       static_cast<int>(sdm->data.size()), 0);
             }
         }
     } else if (auto* cim = std::get_if<CheckInMessage>(&message)) {
@@ -77,8 +72,8 @@ void MessengerClient::handle_initiate_forwarder_client_req(const InitiateForward
         return;
     }
 
-    int sock = socket(result->ai_family, result->ai_socktype, result->ai_protocol);
-    if (sock < 0) {
+    SOCKET sock = socket(result->ai_family, result->ai_socktype, result->ai_protocol);
+    if (sock == INVALID_SOCKET) {
         freeaddrinfo(result);
         auto rep = InitiateForwarderClientRep{
             message.forwarder_client_id, "0.0.0.0", 0, 1, 0x01
@@ -87,15 +82,17 @@ void MessengerClient::handle_initiate_forwarder_client_req(const InitiateForward
         return;
     }
 
-    if (::connect(sock, result->ai_addr, result->ai_addrlen) < 0) {
+    if (::connect(sock, result->ai_addr, static_cast<int>(result->ai_addrlen)) == SOCKET_ERROR) {
         freeaddrinfo(result);
-        close(sock);
 
+        int err = WSAGetLastError();
         uint32_t reason = 0x01;
-        if (errno == ENETUNREACH) reason = 0x03;
-        else if (errno == EHOSTUNREACH) reason = 0x04;
-        else if (errno == ECONNREFUSED) reason = 0x05;
-        else if (errno == ETIMEDOUT) reason = 0x06;
+        if (err == WSAENETUNREACH) reason = 0x03;
+        else if (err == WSAEHOSTUNREACH) reason = 0x04;
+        else if (err == WSAECONNREFUSED) reason = 0x05;
+        else if (err == WSAETIMEDOUT) reason = 0x06;
+
+        closesocket(sock);
 
         auto rep = InitiateForwarderClientRep{
             message.forwarder_client_id, "0.0.0.0", 0, 1, reason
@@ -106,9 +103,8 @@ void MessengerClient::handle_initiate_forwarder_client_req(const InitiateForward
 
     freeaddrinfo(result);
 
-    // Get local address info
     struct sockaddr_storage local_addr{};
-    socklen_t addr_len = sizeof(local_addr);
+    int addr_len = sizeof(local_addr);
     getsockname(sock, reinterpret_cast<struct sockaddr*>(&local_addr), &addr_len);
 
     char bind_address[INET6_ADDRSTRLEN];
@@ -117,12 +113,12 @@ void MessengerClient::handle_initiate_forwarder_client_req(const InitiateForward
 
     if (local_addr.ss_family == AF_INET) {
         auto* addr4 = reinterpret_cast<struct sockaddr_in*>(&local_addr);
-        inet_ntop(AF_INET, &addr4->sin_addr, bind_address, sizeof(bind_address));
+        InetNtopA(AF_INET, &addr4->sin_addr, bind_address, sizeof(bind_address));
         bind_port = ntohs(addr4->sin_port);
         atype = 1;
     } else {
         auto* addr6 = reinterpret_cast<struct sockaddr_in6*>(&local_addr);
-        inet_ntop(AF_INET6, &addr6->sin6_addr, bind_address, sizeof(bind_address));
+        InetNtopA(AF_INET6, &addr6->sin6_addr, bind_address, sizeof(bind_address));
         bind_port = ntohs(addr6->sin6_port);
         atype = 4;
     }
@@ -144,7 +140,7 @@ void MessengerClient::handle_initiate_forwarder_client_req(const InitiateForward
 }
 
 void MessengerClient::stream(const std::string& forwarder_client_id) {
-    int client_fd;
+    SOCKET client_fd;
     {
         std::lock_guard<std::mutex> lock(forwarder_clients_mutex);
         auto it = forwarder_clients.find(forwarder_client_id);
@@ -152,8 +148,8 @@ void MessengerClient::stream(const std::string& forwarder_client_id) {
         client_fd = it->second;
     }
 
-    uint8_t buffer[4096];
-    ssize_t bytes_read;
+    char buffer[4096];
+    int bytes_read;
 
     while ((bytes_read = recv(client_fd, buffer, sizeof(buffer), 0)) > 0) {
         std::vector<uint8_t> data(buffer, buffer + bytes_read);
@@ -166,7 +162,7 @@ void MessengerClient::stream(const std::string& forwarder_client_id) {
         forwarder_clients.erase(forwarder_client_id);
     }
 
-    close(client_fd);
+    closesocket(client_fd);
 
     auto close_msg = SendDataMessage{forwarder_client_id, {}};
     send_downstream_message(Message{close_msg});
