@@ -20,6 +20,7 @@ public:
     ~HTTPMessengerClient() override;
 
     void connect() override;
+    void start() override;
     void send_downstream_message(const Message& message) override;
     void handle_message(const Message& message) override;
 

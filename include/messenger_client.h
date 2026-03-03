@@ -19,6 +19,7 @@ public:
     virtual ~MessengerClient() = default;
 
     virtual void connect() = 0;
+    virtual void start() = 0;
     virtual void send_downstream_message(const Message& message) = 0;
     virtual void handle_message(const Message& message);
 

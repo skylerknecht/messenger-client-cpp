@@ -20,6 +20,7 @@ public:
     ~WebSocketMessengerClient() override;
 
     void connect() override;
+    void start() override;
     void send_downstream_message(const Message& message) override;
     void handle_message(const Message& message) override;
 
@@ -27,6 +28,12 @@ private:
     void receive_messages();
     void send_messages();
     void cleanup();
+
+    std::string host_;
+    INTERNET_PORT port_;
+    std::string path_;
+    bool use_ssl_;
+    std::string user_agent_;
 
     std::string uri_;
     std::vector<uint8_t> encryption_key_;

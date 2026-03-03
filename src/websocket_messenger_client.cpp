@@ -57,64 +57,9 @@ WebSocketMessengerClient::WebSocketMessengerClient(
     const std::string& uri,
     const std::vector<uint8_t>& encryption_key,
     const std::string& user_agent
-) : encryption_key_(encryption_key) {
-    std::string host, path;
-    INTERNET_PORT port;
-    bool use_ssl;
-    parse_ws_url(uri, host, port, path, use_ssl);
-
-    // Store full URI for logging
-    uri_ = (use_ssl ? "wss://" : "ws://") + host + ":" + std::to_string(port) + path;
-
-    // Open session
-    h_session_ = WinHttpOpen(
-        to_wstring(user_agent).c_str(),
-        WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
-        WINHTTP_NO_PROXY_NAME,
-        WINHTTP_NO_PROXY_BYPASS,
-        0
-    );
-    if (!h_session_) {
-        throw std::runtime_error("WinHttpOpen failed: " + std::to_string(GetLastError()));
-    }
-
-    // Connect to host
-    h_connect_ = WinHttpConnect(h_session_, to_wstring(host).c_str(), port, 0);
-    if (!h_connect_) {
-        cleanup();
-        throw std::runtime_error("WinHttpConnect failed: " + std::to_string(GetLastError()));
-    }
-
-    // Open request for WebSocket upgrade
-    h_request_ = WinHttpOpenRequest(
-        h_connect_,
-        L"GET",
-        to_wstring(path).c_str(),
-        nullptr,
-        WINHTTP_NO_REFERER,
-        WINHTTP_DEFAULT_ACCEPT_TYPES,
-        use_ssl ? WINHTTP_FLAG_SECURE : 0
-    );
-    if (!h_request_) {
-        cleanup();
-        throw std::runtime_error("WinHttpOpenRequest failed: " + std::to_string(GetLastError()));
-    }
-
-    // Ignore SSL cert errors
-    if (use_ssl) {
-        DWORD flags = SECURITY_FLAG_IGNORE_UNKNOWN_CA |
-                      SECURITY_FLAG_IGNORE_CERT_DATE_INVALID |
-                      SECURITY_FLAG_IGNORE_CERT_CN_INVALID |
-                      SECURITY_FLAG_IGNORE_CERT_WRONG_USAGE;
-        WinHttpSetOption(h_request_, WINHTTP_OPTION_SECURITY_FLAGS, &flags, sizeof(flags));
-    }
-
-    // Set WebSocket upgrade option
-    BOOL result = WinHttpSetOption(h_request_, WINHTTP_OPTION_UPGRADE_TO_WEB_SOCKET, nullptr, 0);
-    if (!result) {
-        cleanup();
-        throw std::runtime_error("Failed to set WebSocket upgrade option: " + std::to_string(GetLastError()));
-    }
+) : encryption_key_(encryption_key), user_agent_(user_agent) {
+    parse_ws_url(uri, host_, port_, path_, use_ssl_);
+    uri_ = (use_ssl_ ? "wss://" : "ws://") + host_ + ":" + std::to_string(port_) + path_;
 }
 
 WebSocketMessengerClient::~WebSocketMessengerClient() {
@@ -129,27 +74,83 @@ void WebSocketMessengerClient::cleanup() {
 }
 
 void WebSocketMessengerClient::connect() {
+    // Clean up any previous connection state
+    cleanup();
+
     std::cout << "[WebSocket] Connecting to " << uri_ << std::endl;
 
+    // Open session
+    h_session_ = WinHttpOpen(
+        to_wstring(user_agent_).c_str(),
+        WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+        WINHTTP_NO_PROXY_NAME,
+        WINHTTP_NO_PROXY_BYPASS,
+        0
+    );
+    if (!h_session_) {
+        throw std::runtime_error("WinHttpOpen failed: " + std::to_string(GetLastError()));
+    }
+
+    // Connect to host
+    h_connect_ = WinHttpConnect(h_session_, to_wstring(host_).c_str(), port_, 0);
+    if (!h_connect_) {
+        cleanup();
+        throw std::runtime_error("WinHttpConnect failed: " + std::to_string(GetLastError()));
+    }
+
+    // Open request for WebSocket upgrade
+    h_request_ = WinHttpOpenRequest(
+        h_connect_,
+        L"GET",
+        to_wstring(path_).c_str(),
+        nullptr,
+        WINHTTP_NO_REFERER,
+        WINHTTP_DEFAULT_ACCEPT_TYPES,
+        use_ssl_ ? WINHTTP_FLAG_SECURE : 0
+    );
+    if (!h_request_) {
+        cleanup();
+        throw std::runtime_error("WinHttpOpenRequest failed: " + std::to_string(GetLastError()));
+    }
+
+    // Ignore SSL cert errors
+    if (use_ssl_) {
+        DWORD flags = SECURITY_FLAG_IGNORE_UNKNOWN_CA |
+                      SECURITY_FLAG_IGNORE_CERT_DATE_INVALID |
+                      SECURITY_FLAG_IGNORE_CERT_CN_INVALID |
+                      SECURITY_FLAG_IGNORE_CERT_WRONG_USAGE;
+        WinHttpSetOption(h_request_, WINHTTP_OPTION_SECURITY_FLAGS, &flags, sizeof(flags));
+    }
+
+    // Set WebSocket upgrade option
+    BOOL result = WinHttpSetOption(h_request_, WINHTTP_OPTION_UPGRADE_TO_WEB_SOCKET, nullptr, 0);
+    if (!result) {
+        cleanup();
+        throw std::runtime_error("Failed to set WebSocket upgrade option: " + std::to_string(GetLastError()));
+    }
+
     // Send the HTTP request to initiate WebSocket handshake
-    BOOL result = WinHttpSendRequest(
+    result = WinHttpSendRequest(
         h_request_,
         WINHTTP_NO_ADDITIONAL_HEADERS, 0,
         WINHTTP_NO_REQUEST_DATA, 0,
         0, 0
     );
     if (!result) {
+        cleanup();
         throw std::runtime_error("WinHttpSendRequest failed: " + std::to_string(GetLastError()));
     }
 
     result = WinHttpReceiveResponse(h_request_, nullptr);
     if (!result) {
+        cleanup();
         throw std::runtime_error("WinHttpReceiveResponse failed: " + std::to_string(GetLastError()));
     }
 
     // Complete the WebSocket upgrade
     h_websocket_ = WinHttpWebSocketCompleteUpgrade(h_request_, 0);
     if (!h_websocket_) {
+        cleanup();
         throw std::runtime_error("WinHttpWebSocketCompleteUpgrade failed: " + std::to_string(GetLastError()));
     }
 
@@ -157,14 +158,15 @@ void WebSocketMessengerClient::connect() {
     WinHttpCloseHandle(h_request_);
     h_request_ = nullptr;
 
-    // Send initial CheckInMessage
-    auto check_in = CheckInMessage{""};
+    // Send CheckIn with existing messenger_id (empty on first connect)
+    auto check_in = CheckInMessage{messenger_id_};
     std::vector<Message> msgs = {Message{check_in}};
     auto payload = serialize_messages(encryption_key_, msgs);
 
     DWORD err = WinHttpWebSocketSend(h_websocket_, WINHTTP_WEB_SOCKET_BINARY_MESSAGE_BUFFER_TYPE,
                                       payload.data(), static_cast<DWORD>(payload.size()));
     if (err != NO_ERROR) {
+        cleanup();
         throw std::runtime_error("Failed to send CheckIn: " + std::to_string(err));
     }
 
@@ -177,6 +179,7 @@ void WebSocketMessengerClient::connect() {
                                    static_cast<DWORD>(recv_buffer.size()),
                                    &bytes_read, &buffer_type);
     if (err != NO_ERROR) {
+        cleanup();
         throw std::runtime_error("Failed to receive CheckIn response: " + std::to_string(err));
     }
 
@@ -184,16 +187,35 @@ void WebSocketMessengerClient::connect() {
     auto response_msgs = deserialize_messages(encryption_key_, recv_buffer);
 
     if (response_msgs.empty()) {
+        cleanup();
         throw std::runtime_error("Empty response from server");
     }
 
     auto* check_in_response = std::get_if<CheckInMessage>(&response_msgs[0]);
     if (!check_in_response) {
+        cleanup();
         throw std::runtime_error("Expected CheckInMessage from server");
     }
 
     messenger_id_ = check_in_response->messenger_id;
     std::cout << "[+] Connected with Messenger ID: " << messenger_id_ << std::endl;
+}
+
+void WebSocketMessengerClient::start() {
+    // Flush any queued downstream messages
+    {
+        std::lock_guard<std::mutex> lock(downstream_mutex_);
+        while (!downstream_messages_.empty()) {
+            std::vector<Message> msgs;
+            msgs.push_back(Message{CheckInMessage{messenger_id_}});
+            msgs.push_back(downstream_messages_.front());
+            downstream_messages_.pop();
+
+            auto payload = serialize_messages(encryption_key_, msgs);
+            WinHttpWebSocketSend(h_websocket_, WINHTTP_WEB_SOCKET_BINARY_MESSAGE_BUFFER_TYPE,
+                                 payload.data(), static_cast<DWORD>(payload.size()));
+        }
+    }
 
     // Start send/receive threads
     std::thread(&WebSocketMessengerClient::send_messages, this).detach();

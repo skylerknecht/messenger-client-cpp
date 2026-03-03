@@ -17,6 +17,10 @@ def add_arguments(parser):
                      help="AES encryption key to embed.")
     cfg.add_argument("--user-agent", default=USER_AGENT,
                      help="Custom HTTP/WebSocket User-Agent string.")
+    cfg.add_argument("--retry-attempts", type=int, default=5,
+                     help="Number of reconnection attempts after disconnect.")
+    cfg.add_argument("--retry-duration", type=float, default=60.0,
+                     help="Total duration in seconds spread across retry attempts.")
     cfg.add_argument("--remote-port-forwards", nargs="*", default=[],
                      help="Space delimited remote port forwards LISTENING-IP:LISTENING-PORT:REMOTE-IP:REMOTE-PORT.")
 
@@ -33,6 +37,8 @@ def build(args):
     content = content.replace("{{ server_url }}", args.server_url)
     content = content.replace("{{ encryption_key }}", args.encryption_key)
     content = content.replace("{{ user_agent }}", args.user_agent)
+    content = content.replace("{{ retry_attempts }}", str(args.retry_attempts))
+    content = content.replace("{{ retry_duration }}", str(args.retry_duration))
     content = content.replace("{{ remote_port_forwards }}", forwards_str)
 
     out_path = Path(args.name)

