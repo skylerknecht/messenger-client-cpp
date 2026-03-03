@@ -19,6 +19,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Build DLL source from template
+        run: python builder.py --name src/dllmain.cpp
+
       - name: Configure CMake
         run: cmake -B build -A ${{ matrix.arch == 'x64' && 'x64' || 'Win32' }}
 
