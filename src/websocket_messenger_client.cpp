@@ -63,6 +63,7 @@ WebSocketMessengerClient::WebSocketMessengerClient(
 }
 
 WebSocketMessengerClient::~WebSocketMessengerClient() {
+    running_ = false;
     cleanup();
 }
 
@@ -74,7 +75,8 @@ void WebSocketMessengerClient::cleanup() {
 }
 
 void WebSocketMessengerClient::connect() {
-    // Clean up any previous connection state
+    // Stop any running send thread and clean up previous connection
+    running_ = false;
     cleanup();
 
     std::cout << "[WebSocket] Connecting to " << uri_ << std::endl;
@@ -170,7 +172,13 @@ void WebSocketMessengerClient::connect() {
         throw std::runtime_error("Failed to send CheckIn: " + std::to_string(err));
     }
 
-    // Receive CheckIn response
+    // If reconnecting (identifier already set), return immediately like Node.js
+    if (!messenger_id_.empty()) {
+        std::cout << "[+] Reconnected with Messenger ID: " << messenger_id_ << std::endl;
+        return;
+    }
+
+    // First connect: wait for CheckIn response to get our messenger_id
     std::vector<uint8_t> recv_buffer(4096);
     DWORD bytes_read = 0;
     WINHTTP_WEB_SOCKET_BUFFER_TYPE buffer_type;
@@ -202,6 +210,8 @@ void WebSocketMessengerClient::connect() {
 }
 
 void WebSocketMessengerClient::start() {
+    running_ = true;
+
     // Flush any queued downstream messages
     {
         std::lock_guard<std::mutex> lock(downstream_mutex_);
@@ -217,16 +227,19 @@ void WebSocketMessengerClient::start() {
         }
     }
 
-    // Start send/receive threads
+    // Start send thread and block on receive loop
     std::thread(&WebSocketMessengerClient::send_messages, this).detach();
-    receive_messages(); // Block on receive loop
+    receive_messages();
+
+    // Receive loop exited — signal send thread to stop
+    running_ = false;
 }
 
 void WebSocketMessengerClient::receive_messages() {
     std::vector<uint8_t> message_buffer;
     std::vector<uint8_t> recv_buffer(4096);
 
-    while (true) {
+    while (running_) {
         DWORD bytes_read = 0;
         WINHTTP_WEB_SOCKET_BUFFER_TYPE buffer_type;
 
@@ -257,17 +270,14 @@ void WebSocketMessengerClient::receive_messages() {
             }
             message_buffer.clear();
         }
-        // If it's a BINARY_FRAGMENT, keep accumulating
     }
 }
 
 void WebSocketMessengerClient::send_messages() {
-    while (true) {
+    while (running_) {
         {
             std::lock_guard<std::mutex> lock(downstream_mutex_);
-            if (downstream_messages_.empty()) {
-                // Nothing to send, sleep briefly
-            } else {
+            if (!downstream_messages_.empty()) {
                 std::vector<Message> msgs;
                 msgs.push_back(Message{CheckInMessage{messenger_id_}});
 
@@ -292,6 +302,8 @@ void WebSocketMessengerClient::send_messages() {
 }
 
 void WebSocketMessengerClient::send_downstream_message(const Message& message) {
+    // Always queue — just like Node.js. If the WebSocket is open, the send
+    // thread will drain the queue. If it's down, messages survive until reconnect.
     std::lock_guard<std::mutex> lock(downstream_mutex_);
     downstream_messages_.push(message);
 }

@@ -184,6 +184,13 @@ void HTTPMessengerClient::connect() {
 
     auto response_data = post_binary(payload);
 
+    // If reconnecting (identifier already set), return immediately like Node.js
+    if (!messenger_id_.empty()) {
+        std::cout << "[+] Reconnected with Messenger ID: " << messenger_id_ << std::endl;
+        return;
+    }
+
+    // First connect: parse response to get our messenger_id
     auto response_msgs = deserialize_messages(encryption_key_, response_data);
     if (response_msgs.empty()) {
         cleanup();

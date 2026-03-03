@@ -3,6 +3,7 @@
 
 #include "messenger_client.h"
 
+#include <atomic>
 #include <windows.h>
 #include <winhttp.h>
 
@@ -43,6 +44,8 @@ private:
     HINTERNET h_connect_ = nullptr;
     HINTERNET h_request_ = nullptr;
     HINTERNET h_websocket_ = nullptr;
+
+    std::atomic<bool> running_{false};
 
     std::queue<Message> downstream_messages_;
     std::mutex downstream_mutex_;
