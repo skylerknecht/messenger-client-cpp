@@ -230,7 +230,14 @@ void HTTPMessengerClient::poll_server() {
 
             auto response_msgs = deserialize_messages(encryption_key_, response_data);
             for (const auto& msg : response_msgs) {
-                std::thread([this, msg]() { handle_message(msg); }).detach();
+                if (std::holds_alternative<InitiateForwarderClientReq>(msg) ||
+                    std::holds_alternative<InitiateForwarderClientRep>(msg)) {
+                    std::thread([this, msg]() {
+                        try { handle_message(msg); } catch (...) {}
+                    }).detach();
+                } else {
+                    try { handle_message(msg); } catch (...) {}
+                }
             }
 
             std::this_thread::sleep_for(std::chrono::seconds(1));

@@ -228,7 +228,9 @@ void WebSocketMessengerClient::start() {
     }
 
     // Start send thread and block on receive loop
-    std::thread(&WebSocketMessengerClient::send_messages, this).detach();
+    std::thread([this]() {
+        try { send_messages(); } catch (...) {}
+    }).detach();
     receive_messages();
 
     // Receive loop exited — signal send thread to stop
@@ -263,7 +265,16 @@ void WebSocketMessengerClient::receive_messages() {
             try {
                 auto messages = deserialize_messages(encryption_key_, message_buffer);
                 for (const auto& msg : messages) {
-                    std::thread([this, msg]() { handle_message(msg); }).detach();
+                    // Blocking handlers (connect/stream) get their own thread.
+                    // Everything else is handled inline like Node.js.
+                    if (std::holds_alternative<InitiateForwarderClientReq>(msg) ||
+                        std::holds_alternative<InitiateForwarderClientRep>(msg)) {
+                        std::thread([this, msg]() {
+                            try { handle_message(msg); } catch (...) {}
+                        }).detach();
+                    } else {
+                        try { handle_message(msg); } catch (...) {}
+                    }
                 }
             } catch (const std::exception& ex) {
                 std::cerr << "[!] Error parsing message: " << ex.what() << std::endl;
